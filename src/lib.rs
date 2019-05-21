@@ -56,16 +56,15 @@
 //! }
 //! ```
 
-#[macro_use]
-extern crate lazy_static;
+#[cfg(feature = "hashmap")]
+extern crate phf;
 
-mod dict;
-pub mod integer_hasher;
-mod pinyin_map;
-
-pub use dict::PHONETIC_SYMBOL_MAP;
-pub use pinyin_map::PINYIN_HASHMAP;
 use std::collections::HashSet;
+
+// PHONETIC_SYMBOL_DATA PHONETIC_SYMBOL_MAP
+// PINYIN_DATA          PINYIN_MAP
+include!(concat!(env!("OUT_DIR"), "/codegen.rs"));
+
 
 // 声母表
 const _INITIALS: [&str; 21] = [
@@ -126,6 +125,30 @@ impl Default for Args {
     }
 }
 
+#[cfg(not(feature = "hashmap"))]
+fn pinyin_get(c: &char) -> Option<&str> {
+    PINYIN_DATA.binary_search_by_key(c, |&(k, _)| k)
+        .ok()
+        .map(|index| PINYIN_DATA[index].1)
+}
+#[cfg(feature = "hashmap")]
+fn pinyin_get(c: &char) -> Option<&str> {
+    PINYIN_MAP.get(c).map(|s| *s)
+}
+
+#[cfg(not(feature = "hashmap"))]
+fn phonetic_symbol_get(c: &char) -> Option<&str> {
+    PHONETIC_SYMBOL_DATA.binary_search_by_key(c, |&(k, _)| k)
+        .ok()
+        .map(|index| PHONETIC_SYMBOL_DATA[index].1)
+}
+
+#[cfg(feature = "hashmap")]
+fn phonetic_symbol_get(c: &char) -> Option<&str> {
+    PHONETIC_SYMBOL_MAP.get(c).map(|s| *s)
+}
+
+
 // 获取单个拼音中的声母
 fn initial(p: &str) -> String {
     let mut s = "".to_string();
@@ -157,9 +180,8 @@ fn to_fixed(p: &str, a: &Args) -> String {
     let py = p
         .chars()
         .map(|c| {
-            match PHONETIC_SYMBOL_MAP.binary_search_by_key(&c, |&(k, _)| k) {
-                Ok(index) => {
-                    let symbol = PHONETIC_SYMBOL_MAP[index].1;
+            phonetic_symbol_get(&c)
+                .map(|symbol| {
                     match a.style {
                         // 不包含声调
                         Style::Normal | Style::FirstLetter | Style::Finals => {
@@ -167,24 +189,20 @@ fn to_fixed(p: &str, a: &Args) -> String {
                             symbol
                                 .chars()
                                 .filter(|c: &char| {
-                                    // NOTE: 该方法在 rustc 1.17.0 (56124baa9 2017-04-24) 版本当中需要引入 `use std::ascii::AsciiExt;`
+                                    // NOTE: 该方法在 rustc 1.17.0 (56124baa9 2017-04-24) 
+                                    //       版本当中需要引入 `use std::ascii::AsciiExt;`
                                     // !c.is_ascii_digit()
                                     *c != '0' && *c != '1' && *c != '2' && *c != '3' && *c != '4'
                                 })
                                 .collect::<String>()
-                        }
-                        Style::Tone2 | Style::FinalsTone2 => {
-                            // 返回使用数字标识声调的字符
-                            symbol.to_string()
-                        }
-                        _ => {
-                            // 声调在头上
-                            c.to_string()
-                        }
+                        },
+                        // 返回使用数字标识声调的字符
+                        Style::Tone2 | Style::FinalsTone2 => symbol.to_string(),
+                        // 声调在头上
+                        _ => c.to_string(),
                     }
-                }
-                Err(_) => c.to_string(),
-            }
+                })
+                .unwrap_or(c.to_string())
         })
         .collect::<String>();
 
@@ -212,11 +230,11 @@ fn apply_style(pys: Vec<String>, a: &Args) -> Vec<String> {
     result
 }
 
-fn single_pinyin(c: char, a: &Args) -> Vec<String> {
-    let ret: Vec<String> = match PINYIN_HASHMAP.get(&c) {
-        Some(candidates_str) => {
+fn single_pinyin(c: char, arg: &Args) -> Vec<String> {
+    let ret: Vec<String> = pinyin_get(&c)
+        .map(|candidates_str| {
             let candidates = candidates_str.split(',').collect::<Vec<&str>>();
-            if candidates.is_empty() || a.heteronym {
+            if candidates.is_empty() || arg.heteronym {
                 candidates
                     .iter()
                     .map(std::string::ToString::to_string)
@@ -224,11 +242,10 @@ fn single_pinyin(c: char, a: &Args) -> Vec<String> {
             } else {
                 vec![candidates[0].to_string()]
             }
-        }
-        None => vec![],
-    };
-
-    apply_style(ret, a)
+        })
+        .unwrap_or(vec![]);
+    
+    apply_style(ret, arg)
 }
 
 /// 汉字转拼音
