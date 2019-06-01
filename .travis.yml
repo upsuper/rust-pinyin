@@ -1,6 +1,10 @@
 language: rust
 dist: trusty
 
+cache:
+  directories:
+    - $HOME/.cargo
+
 rust:
   - stable
   - beta
